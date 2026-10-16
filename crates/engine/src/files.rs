@@ -1151,7 +1151,8 @@ enum Planned {
 }
 
 /// Load into `buf` (the file's full length, its `loaded` ranges read) what `plan` names, round by
-/// round, until it is [`HeaderPlan::Ready`](lightcraft_raw::sparse::HeaderPlan::Ready). `Whole`
+/// round, until it is [`HeaderPlan::Ready`](lightcraft_raw::sparse::HeaderPlan::Ready), in the
+/// fewer, larger reads [`lightcraft_raw::sparse::reads`] makes of it. `Whole`
 /// when the plan says so, when more than `share` tenths of the file would be read, or after `rounds`.
 fn read_planned(
     file: &mut std::fs::File,
@@ -1161,14 +1162,20 @@ fn read_planned(
     share: u64,
     plan: fn(&[u8], &lightcraft_raw::sparse::Ranges) -> lightcraft_raw::sparse::HeaderPlan,
 ) -> std::io::Result<Planned> {
-    use lightcraft_raw::sparse::HeaderPlan;
+    use lightcraft_raw::sparse::{HeaderPlan, READ_GAP, READ_MIN, reads};
     let total = buf.len() as u64;
+    let fits = |more: &lightcraft_raw::sparse::Ranges, loaded: &lightcraft_raw::sparse::Ranges| {
+        loaded.total().saturating_add(more.total()).saturating_mul(10) <= total.saturating_mul(share)
+    };
     for _ in 0..rounds {
         match plan(buf, loaded) {
             HeaderPlan::Need(more) => {
-                if loaded.total().saturating_add(more.total()).saturating_mul(10) > total.saturating_mul(share) {
+                if !fits(&more, loaded) {
                     return Ok(Planned::Whole);
                 }
+                // fewer, larger reads (a network share pays a round trip for each), unless that tips the share
+                let wide = reads(&more, loaded, total, READ_MIN, READ_GAP);
+                let more = if fits(&wide, loaded) { wide } else { more };
                 for &(start, end) in more.spans() {
                     load_range(file, buf, loaded, start, end)?;
                 }
