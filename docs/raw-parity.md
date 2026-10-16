@@ -78,45 +78,45 @@ committed table is stale.
 
 | Maker | Adobe models | verified | unverified | preview | unsupported | Main reason for preview / unsupported |
 |---|---:|---:|---:|---:|---:|---|
-| Sony | 149 | 86 | 51 | 10 | 2 | DSLR-A200…A390 and A850 12-bit compressed ARW (preview, #535); A100 preview-only and DSC-F828 refused (#702 fixed the regression; their raws aren't decoded); SRF not imported |
-| Canon | 134 | 12 | 99 | 21 | 2 | CRW (2000–2004 bodies) preview; EOS-1D / 1Ds TIFF raws not imported |
-| Samsung | 128 | 4 | 115 | 9 | 0 | compressed SRW (NX1, NX30, NX300, NX500, NX2000, NX3000, NX3300, NX mini, Galaxy NX) |
-| Apple | 113 | 1 | 112 | 0 | 0 | — (DNG / ProRAW) |
+| Sony | 149 | 94 | 43 | 9 | 3 | DSLR-A200…A390 and A850 12-bit compressed ARW (preview, #535); A100 preview-only and DSC-F828 refused (#702 fixed the regression; their raws aren't decoded); SRF not imported |
+| Canon | 134 | 95 | 16 | 21 | 2 | CRW (2000–2004 bodies) preview; EOS-1D / 1Ds TIFF raws not imported |
+| Samsung | 128 | 10 | 109 | 9 | 0 | compressed SRW (NX1, NX30, NX300, NX500, NX2000, NX3000, NX3300, NX mini, Galaxy NX) |
+| Apple | 113 | 4 | 109 | 0 | 0 | — (DNG / ProRAW) |
 | Panasonic | 104 | 93 | 11 | 0 | 0 | — |
-| Nikon | 99 | 73 | 23 | 0 | 3 | COOLPIX 5700 / 8400 / 8800 decode wrongly (two stacked half-height fields, CMYG read as RGB); HE / HE★ is a per-shot setting, preview-only |
+| Nikon | 99 | 77 | 19 | 0 | 3 | COOLPIX 5700 / 8400 / 8800 decode wrongly (two stacked half-height fields, CMYG read as RGB); HE / HE★ is a per-shot setting, preview-only |
 | Fujifilm | 97 | 65 | 9 | 23 | 0 | pre-X FinePix RAF without a raw IFD (estimated split) |
-| Google | 88 | 1 | 87 | 0 | 0 | — |
-| Olympus | 71 | 3 | 9 | 59 | 0 | **compressed ORF** |
+| Google | 88 | 5 | 83 | 0 | 0 | — |
+| Olympus | 71 | 17 | 3 | 51 | 0 | **compressed ORF** |
 | Leica | 61 | 27 | 34 | 0 | 0 | — |
 | Xiaomi, Oppo, LG, Huawei, OnePlus, Motorola, Nokia | 139 | 0 | 139 | 0 | 0 | — (DNG) |
 | Pentax / Ricoh | 60 | 40 | 20 | 0 | 0 | — |
-| Hasselblad | 34 | 1 | 2 | 31 | 0 | Hasselblad-compressed 3FR / FFF |
+| Hasselblad | 34 | 7 | 2 | 25 | 0 | Hasselblad-compressed 3FR / FFF |
 | Phase One / Leaf / Mamiya | 59 | 1 | 0 | 43 | 15 | IIQ, MOS preview; TIFF raws not imported (MEF decodes) |
 | Casio | 26 | 0 | 26 | 0 | 0 | — (DNG) |
 | DJI | 21 | 4 | 17 | 0 | 0 | DNG |
 | OM Digital Solutions | 7 | 0 | 0 | 7 | 0 | **compressed ORF** |
-| Kodak, Konica Minolta, Epson, Sigma, GoPro, Contax, others | 56 | 0 | 14 | 27 | 15 | DCR, GPR not imported; KDC, MRW, ERF, X3F preview |
-| **All** | **1,446** | **259 (18%)** | **919 (64%)** | **232 (16%)** | **36 (2%)** | |
+| Kodak, Konica Minolta, Epson, Sigma, GoPro, Contax, others | 56 | 6 | 11 | 24 | 15 | DCR, GPR not imported; KDC, MRW, X3F preview (Epson ERF decodes) |
+| **All** | **1,446** | **545 (38%)** | **651 (45%)** | **212 (15%)** | **38 (3%)** | |
 
 ## By use (estimated)
 
 | Bucket | Weight | Camera fully works | On a verified body | Why |
 |---|---:|---:|---:|---|
-| Canon | 33% | 94% | 72% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.6 |
-| Sony | 27% | 98% | 91% | bulk-checked |
-| Nikon | 16% | 98% | 83% | decoders cover every NEF coding but HE; 73 bodies verified |
+| Canon | 33% | 95% | 93% | 18 of the 22 popular bodies write CR3; 26 CR3 bodies verified (raw.pixls.us has a CC0 file for each), the rest at 0.6 |
+| Sony | 27% | 98% | 92% | bulk-checked |
+| Nikon | 16% | 98% | 89% | decoders cover every NEF coding but HE; 77 bodies verified |
 | Fujifilm | 10% | 94% | 92% | |
 | Panasonic | 4% | 100% | 98% | bulk-checked |
 | OM / Olympus | 3% | 6% | 5% | compressed ORF |
-| Phones | 3% | 93% | 1% | DNG |
-| Pentax / Ricoh | 1.5% | 94% | 14% | |
+| Phones | 3% | 93% | 4% | DNG |
+| Pentax / Ricoh | 1.5% | 99% | 80% | |
 | Leica | 1% | 99% | 72% | the Q3 verified, 13 more bodies pinned on CC0 files |
-| DJI | 1% | 95% | 0% | |
-| Medium format and others | 0.5% | 23% | 1% | IIQ, 3FR, X3F |
-| **Weighted** | 100% | **92%** | **59%** | |
+| DJI | 1% | 96% | 19% | |
+| Medium format and others | 0.5% | 29% | 8% | IIQ, 3FR, X3F |
+| **Weighted** | 100% | **94%** | **85%** | |
 
-About 5 in 6 raw photographers' cameras decode, but only about 2 in 5 use a body we have actually
-checked, and Canon, the largest bucket, is the weakest of the big four.
+About 19 in 20 raw photographers' cameras decode, and about 5 in 6 use a body we have actually
+checked (the per-model CC0 sweeps of October 2026); compressed ORF (OM / Olympus) is the largest gap left.
 
 ## Variant matrix (depth per format)
 
@@ -265,7 +265,7 @@ works, from [raw/usage-weights.tsv](raw/usage-weights.tsv).
 |---:|---|---:|---:|---:|---|
 | 1 | Compressed ORF (every Olympus / OM body since ~2008) | +2.6 | 8–15 | ~0.20 | CC0 samples (have 2) |
 | 2 | CR3: remaining CRX variants (no public file uses them) | +0.3 | 10–25 | ~0.02 | files that open as a preview, from users |
-| 3 | Verify popular Nikon, Fujifilm, Canon CR2 and Pentax bodies (one CC0 file each, fix what breaks) | +2.0 | 8–15 | ~0.17 | public samples |
+| 3 | ~~Verify popular Nikon, Fujifilm, Canon CR2 and Pentax bodies (one CC0 file each, fix what breaks)~~ done (#1045, #1081) | (+2.0, taken) | — | — | public samples |
 | 4 | Nikon packed 14-bit under a compressed tag (Z 6II uncompressed, #769) | +0.2 | 1–2 | ~0.13 | PR #671 exists |
 | 5 | Sony DSLR-A200…A390 / A850 12-bit compressed ARW | +0.4 | 3–6 | ~0.08 | samples on raw.pixls.us |
 | 6 | Pre-X FinePix RAF | +0.6 | 4–8 | ~0.08 | samples |
@@ -310,3 +310,4 @@ Beyond decoding:
 | 2026-10-10 (later) | minor | Lens profiles: Sony ILCE-7RM6 in-file distortion next to the ILCE-7RM4A's (its lateral CA parsed, off by default); lens score unchanged (~10%: one more body) |
 | 2026-10-14 | minor | 97 Canon CR2, Pentax and Ricoh models verified (one CC0 raw.pixls.us file each, pinned, checked against the camera JPEG; `canon_pentax_corpus.rs`): 334 verified, 844 unverified, 232 preview; 50% of photographers on a verified body; use-weighted 85% unchanged |
 | 2026-10-14 | minor | Integration batch 36: CC0 per-model verification for 117 Nikon/Fujifilm, 97 Canon CR2/Pentax/Ricoh, 21 Sony/Leica and 23 Olympus/Samsung bodies, 22 more CR3 bodies and 30 more models; Epson ERF and Mamiya MEF decode; measured Nikon image areas (#1053, #1770): 515 verified, 675 unverified, 218 preview, 38 unsupported (re-measured with `coverage.py`) |
+| 2026-10-15 | minor | By-maker and by-use tables re-measured with `coverage.py` after batches 36–39 (545 verified, 651 unverified, 212 preview, 38 unsupported; ~94% of photographers' cameras fully work, ~85% on a verified body); rows the per-model PRs had updated are current again |

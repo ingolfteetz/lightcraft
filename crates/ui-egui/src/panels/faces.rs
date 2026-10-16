@@ -164,6 +164,42 @@ pub fn setup_banner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
+/// keeps them on the CPU.
+fn gpu_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, gpu: &Value) {
+    heading(ui, t, "Processor");
+    let mut cpu = gpu["cpuOnly"].as_bool().unwrap_or(false);
+    let r = ui.checkbox(&mut cpu, crate::i18n::tr("Run face models on the CPU only"));
+    register(ui.ctx(), "check:settings.facesCpuOnly", r.rect);
+    if r.changed() {
+        match app.run("faces.gpu", json!({"cpuOnly": cpu})) {
+            Ok(_) => app.caches.faces_epoch += 1,
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    for (what, label) in [("detection", "Detection"), ("recognition", "Recognition")] {
+        let st = &gpu[what];
+        let (text, why) = if st.is_null() {
+            (crate::i18n::tr("Not loaded yet").to_string(), None)
+        } else if st["checking"] == true {
+            (crate::i18n::tr("Checking the GPU…").to_string(), None)
+        } else if let Some(device) = st["device"].as_str() {
+            (device.to_string(), None)
+        } else {
+            (crate::i18n::tr("CPU").to_string(), st["why"].as_str())
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_dim));
+            let r = ui.label(text);
+            register(ui.ctx(), format!("faces:device:{what}"), r.rect);
+            if let Some(why) = why {
+                r.on_hover_text(sentence(why));
+            }
+        });
+    }
+    hint(ui, t, "A face model uses the GPU only when a check shows it gives the same results faster.");
+}
+
 /// A download-style size: decimal megabytes, as file managers and model pages show them.
 fn mb(bytes: Option<u64>) -> String {
     match bytes {
@@ -177,9 +213,7 @@ fn mb(bytes: Option<u64>) -> String {
 /// "its input is not an image" → "Its input is not an image."
 fn sentence(s: &str) -> String {
     let s = s.trim();
-    let mut c = s.chars();
-    let mut out: String = c.next().map(|f| f.to_uppercase().collect()).unwrap_or_default();
-    out.push_str(c.as_str());
+    let mut out = crate::i18n::upper_first(s);
     if !out.is_empty() && !out.ends_with(['.', '!', '?']) {
         out.push('.');
     }
@@ -238,6 +272,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let all: Vec<Value> = list["models"].as_array().cloned().unwrap_or_default();
     let downloads =
         app.session.execute("faces.models.downloads", &json!({})).map(|v| v["downloads"].as_array().cloned().unwrap_or_default()).unwrap_or_default();
+    gpu_section(app, ui, t, &list["gpu"]);
     heading(ui, t, "Face detector");
     for m in all.iter().filter(|m| m["role"] == "detector") {
         model_row(app, ui, t, m, downloads.iter().find(|d| d["id"] == m["id"]), runtime);

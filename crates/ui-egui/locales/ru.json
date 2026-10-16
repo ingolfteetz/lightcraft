@@ -1462,7 +1462,7 @@
   "commercial use subject to GPL conditions": "коммерческое использование на условиях GPL",
   "Decrease Rating": "Уменьшить оценку",
   "Increase Rating": "Повысить оценку",
-  "Click to type a value": "Щёлкните, чтобы ввести значение",
+  "Click to type a value, drag to change it": "Щёлкните, чтобы ввести значение, или перетащите, чтобы изменить",
   "Angle": "Угол",
   "Raw": "RAW",
   "Video": "Видео",
@@ -2324,5 +2324,14 @@
   "Animal Eye Tracking": "Слежение за глазами животных",
   "Human Eye Tracking": "Слежение за глазами людей",
   "Read Focus Points": "Прочитать точки фокусировки",
-  "Reading focus points": "Чтение точек фокусировки"
+  "Reading focus points": "Чтение точек фокусировки",
+  "Click to type a value": "Щёлкните, чтобы ввести значение",
+  "Run face models on the CPU only": "Запускать модели лиц только на ЦП",
+  "Detection": "Обнаружение",
+  "Recognition": "Распознавание",
+  "Not loaded yet": "Ещё не загружена",
+  "Checking the GPU…": "Проверка ГП…",
+  "CPU": "ЦП",
+  "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель лиц использует ГП, только если проверка показала, что он даёт те же результаты быстрее.",
+  "Checking the GPU for faces": "Проверка ГП для лиц"
 }

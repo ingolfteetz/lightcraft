@@ -343,6 +343,32 @@ fn holding_the_brush_still_does_not_harden_the_spot() {
     h.settle(SETTLE);
 }
 
+/// A ⇧-click with the brush paints a straight line from where the last stroke ended (issue #106 of the Classic
+/// fork), one undo step; a plain click only paints a dab where it lands.
+#[test]
+fn shift_click_paints_a_straight_line_from_the_last_stroke() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({}));
+    brush_at(&mut h, 0.2, 0.5);
+    brush_at(&mut h, 0.8, 0.5);
+    assert!(mask_coverage(&h, 0, 50, 50) < 0.01, "two plain clicks leave the space between them alone");
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.5, "y": 0.2}, {"kind": "up", "x": 0.5, "y": 0.2}], "shift": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 3, "{strokes:?}");
+    assert_eq!(strokes[2].points.len(), 2, "from the last stroke's end to the click: {strokes:?}");
+    for (x, y) in [(65, 35), (58, 27)] {
+        assert!(mask_coverage(&h, 0, x, y) > 0.5, "the line from (0.8, 0.5) to (0.5, 0.2) passes ({x}, {y})");
+    }
+    assert!(mask_coverage(&h, 0, 35, 35) < 0.01, "and nowhere else");
+    exec(&mut h, "edit.undo", json!({}));
+    let d = develop(&h);
+    let MaskShape::Brush { strokes } = &d.masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 2, "one undo step takes the line back");
+    h.settle(SETTLE);
+}
+
 #[test]
 fn brush_strokes_carry_auto_mask() {
     let mut h = detail("panel.masking");

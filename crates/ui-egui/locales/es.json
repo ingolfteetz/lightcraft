@@ -1969,7 +1969,7 @@
   "Increase Rating": "Aumentar valoración",
   "Index Faces": "Indexar caras",
   "Index Faces in the Background": "Indexar caras en segundo plano",
-  "Click to type a value": "Hacer clic para escribir un valor",
+  "Click to type a value, drag to change it": "Hacer clic para escribir un valor, arrastrar para cambiarlo",
   "Angle": "Ángulo",
   "Video": "Vídeo",
   "Copyrighted": "Con copyright",
@@ -2331,5 +2331,14 @@
   "Animal Eye Tracking": "Seguimiento de ojos de animales",
   "Human Eye Tracking": "Seguimiento de ojos humanos",
   "Read Focus Points": "Leer puntos de enfoque",
-  "Reading focus points": "Leyendo puntos de enfoque"
+  "Reading focus points": "Leyendo puntos de enfoque",
+  "Click to type a value": "Hacer clic para escribir un valor",
+  "Run face models on the CPU only": "Ejecutar los modelos de caras solo en la CPU",
+  "Detection": "Detección",
+  "Recognition": "Reconocimiento",
+  "Not loaded yet": "Aún no cargado",
+  "Checking the GPU…": "Comprobando la GPU…",
+  "CPU": "CPU",
+  "A face model uses the GPU only when a check shows it gives the same results faster.": "Un modelo de caras usa la GPU solo cuando una comprobación muestra que da los mismos resultados más rápido.",
+  "Checking the GPU for faces": "Comprobando la GPU para las caras"
 }

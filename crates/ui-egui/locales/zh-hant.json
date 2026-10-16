@@ -1789,7 +1789,7 @@
   "commercial use subject to GPL conditions": "commercial use subject to GPL conditions",
   "Decrease Rating": "降低評分",
   "Increase Rating": "提高評分",
-  "Click to type a value": "點擊以輸入數值",
+  "Click to type a value, drag to change it": "點擊以輸入數值，拖曳以變更",
   "Angle": "角度",
   "Video": "影片",
   "Copyrighted": "受著作權保護",
@@ -2132,5 +2132,14 @@
   "Animal Eye Tracking": "動物眼部追蹤",
   "Human Eye Tracking": "人眼追蹤",
   "Read Focus Points": "讀取對焦點",
-  "Reading focus points": "正在讀取對焦點"
+  "Reading focus points": "正在讀取對焦點",
+  "Click to type a value": "點擊以輸入數值",
+  "Run face models on the CPU only": "僅在 CPU 上執行臉孔模型",
+  "Detection": "偵測",
+  "Recognition": "辨識",
+  "Not loaded yet": "尚未載入",
+  "Checking the GPU…": "正在檢查 GPU…",
+  "CPU": "CPU",
+  "A face model uses the GPU only when a check shows it gives the same results faster.": "只有在檢查顯示 GPU 能更快得出相同結果時，臉孔模型才會使用 GPU。",
+  "Checking the GPU for faces": "正在檢查用於臉孔的 GPU"
 }

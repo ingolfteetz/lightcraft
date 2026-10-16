@@ -1973,7 +1973,7 @@
   "Recognition models": "Моделі розпізнавання",
   "Decrease Rating": "Зменшити оцінку",
   "Increase Rating": "Збільшити оцінку",
-  "Click to type a value": "Клацніть, щоб ввести значення",
+  "Click to type a value, drag to change it": "Клацніть, щоб ввести значення, або перетягніть, щоб змінити",
   "Angle": "Кут",
   "Video": "Відео",
   "Copyrighted": "Захищено авторським правом",
@@ -2329,5 +2329,14 @@
   "Animal Eye Tracking": "Стеження за очима тварин",
   "Human Eye Tracking": "Стеження за очима людей",
   "Read Focus Points": "Прочитати точки фокусування",
-  "Reading focus points": "Читання точок фокусування"
+  "Reading focus points": "Читання точок фокусування",
+  "Click to type a value": "Клацніть, щоб ввести значення",
+  "Run face models on the CPU only": "Запускати моделі облич лише на ЦП",
+  "Detection": "Виявлення",
+  "Recognition": "Розпізнавання",
+  "Not loaded yet": "Ще не завантажено",
+  "Checking the GPU…": "Перевірка ГП…",
+  "CPU": "ЦП",
+  "A face model uses the GPU only when a check shows it gives the same results faster.": "Модель облич використовує ГП, лише якщо перевірка показала, що він дає ті самі результати швидше.",
+  "Checking the GPU for faces": "Перевірка ГП для облич"
 }

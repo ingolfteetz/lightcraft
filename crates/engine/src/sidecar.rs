@@ -66,6 +66,13 @@ pub fn sidecar_path(original: &str, naming: SidecarNaming) -> PathBuf {
 /// accepting `.XMP` and `.Xmp`, and a full name whose photo extension differs in case, such as
 /// `IMG_1.cr3.xmp` beside `IMG_1.CR3`, which a case-sensitive file system would otherwise miss).
 pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
+    sidecar_candidates(original, naming).find(|p| p.is_file())
+}
+
+/// The names `original`'s sidecar can have, in the order they are looked for: under `naming`,
+/// then under the other naming (the full name also with the photo extension in the other case),
+/// each as `.xmp`, `.XMP` and `.Xmp`.
+pub(crate) fn sidecar_candidates(original: &str, naming: SidecarNaming) -> impl Iterator<Item = PathBuf> {
     let other = if naming == SidecarNaming::Stem { SidecarNaming::Full } else { SidecarNaming::Stem };
     let ext = Path::new(original).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
     let base = Path::new(original).with_extension("");
@@ -73,7 +80,7 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
     let full_variants: Vec<String> = [recased(ext.to_lowercase()), recased(ext.to_uppercase())].into_iter().flatten().collect();
     [naming, other]
         .into_iter()
-        .flat_map(|n| {
+        .flat_map(move |n| {
             let mut v = vec![sidecar_path(original, n)];
             if n == SidecarNaming::Full {
                 v.extend(full_variants.iter().map(|o| sidecar_path(o, n)));
@@ -81,7 +88,6 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
             v
         })
         .flat_map(|p| [p.clone(), p.with_extension("XMP"), p.with_extension("Xmp")])
-        .find(|p| p.is_file())
 }
 
 /// What a sidecar (or embedded XMP packet) says about a photo. `None` = not stated.

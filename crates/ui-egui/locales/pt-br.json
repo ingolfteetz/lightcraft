@@ -1789,7 +1789,7 @@
   "commercial use subject to GPL conditions": "uso comercial sujeito às condições da GPL",
   "Decrease Rating": "Diminuir avaliação",
   "Increase Rating": "Aumentar avaliação",
-  "Click to type a value": "Clique para digitar um valor",
+  "Click to type a value, drag to change it": "Clique para digitar um valor, arraste para alterá-lo",
   "Angle": "Ângulo",
   "Video": "Vídeo",
   "Copyrighted": "Protegido por direitos autorais",
@@ -2171,5 +2171,14 @@
   "Animal Eye Tracking": "Rastreamento de olhos de animais",
   "Human Eye Tracking": "Rastreamento de olhos humanos",
   "Read Focus Points": "Ler pontos de foco",
-  "Reading focus points": "Lendo pontos de foco"
+  "Reading focus points": "Lendo pontos de foco",
+  "Click to type a value": "Clique para digitar um valor",
+  "Run face models on the CPU only": "Executar os modelos de rostos só na CPU",
+  "Detection": "Detecção",
+  "Recognition": "Reconhecimento",
+  "Not loaded yet": "Ainda não carregado",
+  "Checking the GPU…": "Verificando a GPU…",
+  "CPU": "CPU",
+  "A face model uses the GPU only when a check shows it gives the same results faster.": "Um modelo de rostos só usa a GPU quando uma verificação mostra que ela dá os mesmos resultados mais rápido.",
+  "Checking the GPU for faces": "Verificando a GPU para rostos"
 }
