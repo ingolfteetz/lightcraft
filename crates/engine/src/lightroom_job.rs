@@ -365,7 +365,7 @@ impl LightroomJob {
             if !self.seen.insert(k.clone()) {
                 continue;
             }
-            if Path::new(&p.path).is_file() {
+            if p.original_is_file() {
                 paths.push(p.path.clone());
             } else {
                 missing_sources.insert(k);
@@ -520,6 +520,7 @@ mod tests {
             keywords: Vec::new(),
             history: Vec::new(),
             snapshots: Vec::new(),
+            original: lightroom_catalog::Original::Local,
         }
     }
 

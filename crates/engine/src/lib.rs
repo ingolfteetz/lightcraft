@@ -29,6 +29,7 @@ pub mod demo;
 pub mod denoise;
 pub mod devices;
 pub mod display;
+pub mod doc_path;
 mod errors;
 pub mod export;
 pub mod face_download;
