@@ -273,29 +273,41 @@ fn spawn_finalize(
 }
 
 /// Write the import index after a batch of virtual copies, on a worker that first waits for
-/// `previous` (the write before it); returns the write to wait for next. A failed write is left to
-/// the final one to report. When no worker starts, this write is skipped and `previous` stays the
-/// one to wait for.
+/// `previous` (the write before it); returns the write to wait for next. When no worker starts,
+/// the index is written here. A failed write is logged; the final write, which waits for this one,
+/// writes the whole index again and reports a failure.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_index_write(
     write: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
     previous: Option<std::thread::JoinHandle<()>>,
 ) -> Option<std::thread::JoinHandle<()>> {
-    let (handover, waiting) = mpsc::channel::<std::thread::JoinHandle<()>>();
-    let spawned = std::thread::Builder::new().name("lc-lightroom-index".into()).spawn(move || {
-        if let Ok(previous) = waiting.recv() {
+    type Work = (Option<std::thread::JoinHandle<()>>, lightcraft_engine::lightroom_job::LightroomArchiveFinalization);
+    fn run((previous, write): Work) {
+        if let Some(previous) = previous {
             let _ = previous.join();
         }
-        let _ = lightcraft_engine::guard::catch("Lightroom import index", || write.finish());
-    });
-    match spawned {
+        let written = lightcraft_engine::guard::catch("Lightroom import index", || write.finish()).and_then(|r| r.map_err(|e| e.to_string()));
+        if let Err(e) = written {
+            log::warn!("Lightroom import index: {e}");
+        }
+    }
+    // (the work is handed over once the worker runs, so it stays here when none starts)
+    let (handover, waiting) = mpsc::channel::<Work>();
+    match std::thread::Builder::new().name("lc-lightroom-index".into()).spawn(move || {
+        if let Ok(work) = waiting.recv() {
+            run(work);
+        }
+    }) {
         Ok(handle) => {
-            if let Some(previous) = previous {
-                let _ = handover.send(previous);
+            if let Err(mpsc::SendError(work)) = handover.send((previous, write)) {
+                run(work);
             }
             Some(handle)
         }
-        Err(_) => previous,
+        Err(_) => {
+            run((previous, write));
+            None
+        }
     }
 }
 

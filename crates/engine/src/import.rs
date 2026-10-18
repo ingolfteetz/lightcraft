@@ -1236,7 +1236,7 @@ impl ImportJob {
                 let known = match self.hashed.get(&id) {
                     Some(h) => h.clone(),
                     None => {
-                        let h = hash_file(&path);
+                        let h = hash_file(&path, size);
                         self.hashed.insert(id, h.clone());
                         if let Some(h) = &h {
                             filled.push((id, h.clone()));
@@ -1276,12 +1276,17 @@ fn list_names(dir: &Path) -> Option<std::collections::HashSet<String>> {
     Some(names)
 }
 
-/// The content hash of the file at `path` (as a probe computes it), if it can be read.
+/// The content hash of the file at `path` (as a probe computes it), if it can be read and is
+/// still `size` bytes long: a file that changed since the photo was added would get a hash of
+/// other content than its record's size and dimensions describe.
 #[cfg(not(target_arch = "wasm32"))]
-fn hash_file(path: &str) -> Option<String> {
-    let len = std::fs::metadata(path).ok()?.len();
-    let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+fn hash_file(path: &str, size: u64) -> Option<String> {
+    if std::fs::metadata(path).ok()?.len() != size {
+        return None;
+    }
+    let _permit = crate::memory::work_gate().acquire(usize::try_from(size).unwrap_or(usize::MAX));
+    let bytes = std::fs::read(path).ok().filter(|b| b.len() as u64 == size)?;
+    Some(lightcraft_preview::hash_bytes(&bytes).to_string())
 }
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
@@ -1836,6 +1841,40 @@ mod prepared_tests {
         assert_ne!(new, old, "the key changed");
         assert_eq!(std::fs::read(&new).ok().as_deref(), Some(&b"proxy"[..]), "the proxy is found under the new key");
         assert!(old.exists(), "the old file stays for an undo");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An original that changed size since it was added isn't hashed for its record: the hash
+    /// would describe other content than the record's size and dimensions (review of #1735).
+    #[test]
+    fn an_original_that_changed_size_gets_no_hash_on_demand() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-resized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy) = (dir.join("orig.jpg"), dir.join("copy.jpg"));
+        std::fs::write(&orig, b"same bytes, then more").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        // recorded when the original was 10 bytes long, as the new file is
+        existing.file_size = 10;
+        let id = existing.id;
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let report = import(&mut s, &[copy.to_string_lossy().to_string()], ImportMode::Add).unwrap();
+        assert!(report.duplicates.is_empty(), "{report:?}");
+        assert_eq!(s.catalog.photo(id).unwrap().content_hash, None, "no hash of the original's new content");
         let _ = std::fs::remove_dir_all(dir);
     }
 
