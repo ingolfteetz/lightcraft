@@ -737,10 +737,14 @@ pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> cra
     let mut import = crate::lightroom_job::LightroomImport::begin(s, start)?;
     let mut added = || -> crate::Result<()> {
         while let Some(batch) = job.next_batch(&cancel) {
-            import.commit(s, batch?)?;
+            let index = import.commit(s, batch?)?;
             // each batch is saved: a crash keeps what was added, and importing again continues
+            // (with the index after a batch of virtual copies, which are found again through it)
             if s.library.as_ref().is_some_and(|library| library.on_disk) {
                 s.persist()?;
+                if let Some(index) = index {
+                    index.finish()?;
+                }
             }
         }
         Ok(())

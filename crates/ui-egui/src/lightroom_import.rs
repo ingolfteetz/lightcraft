@@ -52,6 +52,9 @@ pub struct LightroomTask {
     guard: TaskGuard,
     /// The import being added (from the worker's `Started` on).
     import: Option<lightcraft_engine::lightroom_job::LightroomImport>,
+    /// The import index's latest write, after a batch of virtual copies: the next write (and the
+    /// final one) waits for it, so an older index never lands last.
+    index_write: Option<std::thread::JoinHandle<()>>,
 }
 
 impl LightroomTask {
@@ -69,7 +72,7 @@ impl LightroomTask {
             Kind::Import => "Importing Lightroom catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, import: None };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, import: None, index_write: None };
         task.refresh();
         task
     }
@@ -240,12 +243,16 @@ fn spawn_prepare(
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_finalize(
     finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    previous: Option<std::thread::JoinHandle<()>>,
     tx: mpsc::Sender<Message>,
     ctx: egui::Context,
 ) -> Result<(), String> {
     std::thread::Builder::new()
         .name("lc-lightroom-finalize".into())
         .spawn(move || {
+            if let Some(previous) = previous {
+                let _ = previous.join();
+            }
             let result = lightcraft_engine::guard::catch("Lightroom archive finalization", || finalization.finish())
                 .and_then(|r| r.map_err(|e| e.to_string()));
             let _ = tx.send(Message::Finalized(result));
@@ -258,10 +265,46 @@ fn spawn_finalize(
 #[cfg(target_arch = "wasm32")]
 fn spawn_finalize(
     _finalization: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    _previous: Option<std::thread::JoinHandle<()>>,
     _tx: mpsc::Sender<Message>,
     _ctx: egui::Context,
 ) -> Result<(), String> {
     unsupported_wasm().map(|_| ())
+}
+
+/// Write the import index after a batch of virtual copies, on a worker that first waits for
+/// `previous` (the write before it); returns the write to wait for next. A failed write is left to
+/// the final one to report. When no worker starts, this write is skipped and `previous` stays the
+/// one to wait for.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_index_write(
+    write: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    previous: Option<std::thread::JoinHandle<()>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    let (handover, waiting) = mpsc::channel::<std::thread::JoinHandle<()>>();
+    let spawned = std::thread::Builder::new().name("lc-lightroom-index".into()).spawn(move || {
+        if let Ok(previous) = waiting.recv() {
+            let _ = previous.join();
+        }
+        let _ = lightcraft_engine::guard::catch("Lightroom import index", || write.finish());
+    });
+    match spawned {
+        Ok(handle) => {
+            if let Some(previous) = previous {
+                let _ = handover.send(previous);
+            }
+            Some(handle)
+        }
+        Err(_) => previous,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_index_write(
+    _write: lightcraft_engine::lightroom_job::LightroomArchiveFinalization,
+    previous: Option<std::thread::JoinHandle<()>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    previous
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -525,13 +568,18 @@ fn receive(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask
                 terminal(app, ctx, &task, json!({"error": "Lightroom batch before the catalog was read"}));
                 return None;
             };
+            let mut index = None;
             let added = app.session.execute_fn("library.importLightroom", |s| {
-                import.commit(s, *batch)?;
+                index = import.commit(s, *batch)?;
                 Ok(Value::Null)
             });
             if let Err(e) = added {
                 finish(app, ctx, task, false, Some(e.to_string()));
                 return None;
+            }
+            // (the batch is saved; its virtual copies are found again through the index)
+            if let Some(index) = index {
+                task.index_write = spawn_index_write(index, task.index_write.take());
             }
             Some(task)
         }
@@ -592,7 +640,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, mut task: LightroomTask,
     };
     task.enter(Phase::Finalizing);
     let (tx, rx) = mpsc::channel();
-    if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {
+    if let Err(e) = spawn_finalize(finalization, task.index_write.take(), tx, ctx.clone()) {
         let mut result = json!({"report": report, "indexWarning": e});
         if let Some(error) = error {
             result["error"] = json!(error);
