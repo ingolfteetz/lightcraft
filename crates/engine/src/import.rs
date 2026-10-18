@@ -1486,8 +1486,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     let mut purge: Vec<PhotoId> = Vec::new();
     let mut purged: std::collections::HashSet<PhotoId> = Default::default();
     // hashes computed on demand (to compare a new file with photos added from their headers) are kept
+    // (the photo's proxy moves to its new key with it: `carried`)
+    let mut carried: Vec<(Photo, Photo)> = Vec::new();
     for (id, hash) in &prepared.hashes {
         if let Some(p) = s.catalog.photo(*id).filter(|p| p.content_hash.is_none()) {
+            let before = Photo::clone(p);
+            carried.push((before.clone(), Photo { content_hash: Some(hash.clone()), ..before }));
             ops.push(Op::SetContent {
                 id: *id,
                 width: p.width,
@@ -1606,6 +1610,13 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
         // nothing was catalogued: take the moves back (their sources were never touched)
         placed.iter().for_each(crate::import_move::rollback);
         return Err(e);
+    }
+    if let Some(dir) = s.media.smart_dir.clone() {
+        for (before, after) in &carried {
+            if let Err(e) = crate::smart::carry_over(&dir, before, after) {
+                log::warn!("import: smart preview of photo {}: {e}", before.id.0);
+            }
+        }
     }
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
@@ -1781,6 +1792,50 @@ mod prepared_tests {
         assert_eq!(report.imported.len(), 1, "a file of the same size with other bytes is new");
         let hash = lightcraft_preview::hash_bytes(b"same bytes").to_string();
         assert_eq!(s.catalog.photo(id).and_then(|p| p.content_hash.clone()), Some(hash), "the hash is kept");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hash an unhashed photo gets on demand changes its content key, which names its smart
+    /// preview: the proxy goes with it, so the photo still renders when its original goes offline
+    /// (review of #1735). The old file stays for an undo.
+    #[test]
+    fn a_photo_hashed_on_demand_keeps_its_smart_preview() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-smart-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy) = (dir.join("orig.jpg"), dir.join("copy.jpg"));
+        std::fs::write(&orig, b"same bytes").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let smart = dir.join("smart");
+        s.media.smart_dir = Some(smart.clone());
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        existing.file_size = 10;
+        let id = existing.id;
+        let old = crate::smart::sharded_file_path(&smart, &existing);
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"proxy").unwrap();
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let report = import(&mut s, &[copy.to_string_lossy().to_string()], ImportMode::Add).unwrap();
+        assert_eq!(report.duplicates.len(), 1, "{report:?}");
+        let photo = s.catalog.photo(id).unwrap();
+        assert!(photo.content_hash.is_some());
+        let new = crate::smart::file_path(&smart, photo);
+        assert_ne!(new, old, "the key changed");
+        assert_eq!(std::fs::read(&new).ok().as_deref(), Some(&b"proxy"[..]), "the proxy is found under the new key");
+        assert!(old.exists(), "the old file stays for an undo");
         let _ = std::fs::remove_dir_all(dir);
     }
 
