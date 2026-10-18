@@ -87,7 +87,10 @@ probes their originals and parses their XMP and maps their develop settings. Eac
 the owner thread as it arrives, so photos appear while the rest is read; the progress counts each
 original as it is read. Cancelling (✕ in the activity stack) keeps the photos added so far, without
 collections, as one undo step; importing the catalog again continues where it stopped (their
-identities are in the import index) and then adds the collections. Late batches from a closed or
+identities are in the import index) and then adds the collections. Each batch is saved as it is added, so the
+same holds after a crash or a forced quit: a master is found again by its path, a virtual copy
+through the import index, which is written after each batch of virtual copies (they come after
+every master, in the last batches). Late batches from a closed or
 switched library are rejected, including reopening the same path. Ordinary edits during the import
 remain intact (and, as with any batched import, fall into its undo step). The archive index is
 written on a worker. CLI commands run the same pipeline synchronously; browser builds reject native
@@ -119,3 +122,12 @@ the path relative to the catalog that Lightroom records for root folders on the 
 (`relativePathFromCatalog`), when that is a folder, and reports the remapping as a warning. Copying
 a project folder with its catalog inside it therefore keeps its originals linked. Other moved
 originals stay missing; use LightCraft's missing-photo relinking tools to update their paths.
+
+Original and root folder paths are resolved with the catalog as the document and are looked at
+only when they are on this computer or on the network share the catalog itself is on
+(`crates/engine/src/doc_path.rs`). An original on another computer (`\\server\share\…`,
+`//server/…`, `file://server/…`), a device path, or one whose folder or file name in the catalog is
+an absolute path is not looked at: the import lists it as missing with a warning and leaves the
+photo and its virtual copies out of the library. To import originals on a share, open the catalog
+from that share. A path that is not a path on this computer (a Windows drive path read on macOS or
+Linux) is not looked at either and stays catalogued as missing.

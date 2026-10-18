@@ -365,7 +365,7 @@ impl LightroomJob {
             if !self.seen.insert(k.clone()) {
                 continue;
             }
-            if Path::new(&p.path).is_file() {
+            if p.original_is_file() {
                 paths.push(p.path.clone());
             } else {
                 missing_sources.insert(k);
@@ -452,7 +452,12 @@ impl LightroomImport {
 
     /// Add one batch (an undo step, merged into the import's by [`Self::finish`]). No source,
     /// archive or index filesystem work; source XMP sidecars are never rewritten.
-    pub fn commit(&mut self, s: &mut crate::Session, mut batch: LightroomBatch) -> crate::Result<()> {
+    ///
+    /// A batch with virtual copies returns the import index's write, for the caller to run (on a
+    /// worker, after the one before it) once the batch is saved: importing again after a crash
+    /// finds a master by its path, but a virtual copy only through the index, and would add it
+    /// again. (Copies come after every master, so this is the import's last few batches.)
+    pub fn commit(&mut self, s: &mut crate::Session, mut batch: LightroomBatch) -> crate::Result<Option<LightroomArchiveFinalization>> {
         if !self.token.matches(s) || !batch.token.matches(s) {
             batch.normal.rollback();
             return Err(error("Lightroom import belongs to a different open library"));
@@ -467,9 +472,21 @@ impl LightroomImport {
             ImportOptions { mode: ImportMode::Add, on_deleted: crate::import::OnDeleted::Skip, headers_only: true, ..ImportOptions::default() };
         let files = crate::import::commit_prepared(s, &options, &self.now, batch.normal)?;
         let n = batch.photos.len();
+        let copies = batch.photos.iter().any(|m| lightroom_catalog::number_for_job(&m.src.image, "masterImage") != 0);
         self.apply.batch(s, batch.photos, files, &batch.missing_sources)?;
         self.progress.add_done.fetch_add(n, Ordering::Relaxed);
-        Ok(())
+        if !copies || self.token.library_dir().is_none() {
+            return Ok(None);
+        }
+        self.index_write().map(Some)
+    }
+
+    /// The import index's write: the identities of the photos added so far (none for a library
+    /// that isn't on disk).
+    fn index_write(&self) -> crate::Result<LightroomArchiveFinalization> {
+        let path = self.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
+        let bytes = if path.is_some() { Some(serde_json::to_vec(&self.apply.index).map_err(|e| error(e.to_string()))?) } else { None };
+        Ok(LightroomArchiveFinalization { path, bytes })
     }
 
     /// Finish the import: its collections become albums when `complete` (every batch was added;
@@ -485,9 +502,7 @@ impl LightroomImport {
             s.skip_auto_write = true;
         }
         let report = self.apply.finish(s, &self.collections, &self.members, complete, self.undo0, self.archive_path.as_deref())?;
-        let path = self.token.library_dir().map(|dir| dir.join("Interop/lightroom-index.json"));
-        let bytes = if path.is_some() { Some(serde_json::to_vec(&self.apply.index).map_err(|e| error(e.to_string()))?) } else { None };
-        Ok(LightroomCompletion { report, finalization: LightroomArchiveFinalization { path, bytes } })
+        Ok(LightroomCompletion { report, finalization: self.index_write()? })
     }
 }
 
@@ -520,6 +535,7 @@ mod tests {
             keywords: Vec::new(),
             history: Vec::new(),
             snapshots: Vec::new(),
+            original: lightroom_catalog::Original::Local,
         }
     }
 
@@ -715,6 +731,41 @@ mod tests {
         completion.finalization.finish().unwrap();
         let index = lightroom_catalog::load_index(Some(&index_path)).unwrap();
         assert_eq!(index.photos.get("fixture-1"), Some(&1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Importing again after a crash finds a master by its path, but a virtual copy only through
+    /// the import index: a batch of copies hands back the index's write, so a crash before the
+    /// import finishes doesn't add the saved copies a second time.
+    #[test]
+    fn a_crash_after_a_batch_of_copies_keeps_them_matched() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-lr-crash-copies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut session = crate::Session::new();
+        session.open_library(&dir, false).unwrap();
+        let master = || photo(1, "/missing/crash.jpg", &[]);
+        let copy = || photo(2, "/missing/crash.jpg", &[("masterImage", serde_json::json!(1)), ("copyName", serde_json::json!("Mono"))]);
+        let mut import = LightroomImport::begin(&session, start(&session, 2)).unwrap();
+        let b = batch(&session, vec![master()]);
+        assert!(import.commit(&mut session, b).unwrap().is_none(), "masters are found again by their path");
+        let b = batch(&session, vec![copy()]);
+        let write = import.commit(&mut session, b).unwrap().expect("a batch of copies writes the index");
+        let index_path = write.path().unwrap().to_path_buf();
+        write.finish().unwrap();
+        session.persist().unwrap();
+        // the app stops here: `finish` never runs
+        drop(import);
+        assert_eq!(session.catalog.len(), 2);
+        let mut again = start(&session, 2);
+        again.index = lightroom_catalog::load_index(Some(&index_path)).unwrap();
+        let mut import = LightroomImport::begin(&session, again).unwrap();
+        for photos in [vec![master()], vec![copy()]] {
+            let b = batch(&session, photos);
+            import.commit(&mut session, b).unwrap();
+        }
+        let completion = import.finish(&mut session, true).unwrap();
+        assert_eq!(session.catalog.len(), 2, "the saved copy is matched, not added again: {}", completion.report);
+        assert_eq!(completion.report["imported"], 0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
