@@ -1061,15 +1061,14 @@ impl LightroomApply {
         Ok(())
     }
 
-    /// Finish: the collections become albums (only when every photo was added: `complete`), the
-    /// undo steps since `undo0` become one, and the report.
+    /// Finish: the collections become albums (only when every photo was added: `complete`), and
+    /// the report. (The import's undo steps are one: [`ImportSteps`].)
     pub(crate) fn finish(
         &mut self,
         s: &mut crate::Session,
         collections: &[Row],
         members: &[Row],
         complete: bool,
-        undo0: usize,
         archive: Option<&Path>,
     ) -> crate::Result<Value> {
         let mut albums = HashMap::new();
@@ -1145,7 +1144,6 @@ impl LightroomApply {
         if !ops.is_empty() {
             s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
         }
-        s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
         let mut report = json!({
             "source": self.source,
             "photos": self.ids.len(),
@@ -1167,6 +1165,31 @@ impl LightroomApply {
     }
 }
 
+/// An import's undo steps as one. The steps a batch takes fold into the import's step while that
+/// is still on top of the undo stack; a step taken in between (an edit made while the import runs,
+/// or an undo) stays apart, and the import goes on in a new step. Counted by commits, not by the
+/// stack's length, which stops growing at its cap.
+#[derive(Debug, Default)]
+pub(crate) struct ImportSteps {
+    /// The undo stack's length and the session's commits right after the import's last step.
+    top: Option<(usize, u64)>,
+}
+
+impl ImportSteps {
+    /// Run `f`, folding the undo steps it takes into the import's.
+    pub(crate) fn run<T>(&mut self, s: &mut crate::Session, f: impl FnOnce(&mut crate::Session) -> crate::Result<T>) -> crate::Result<T> {
+        let on_top = self.top == Some((s.undo.len(), s.commits()));
+        let commits0 = s.commits();
+        let result = f(s);
+        let taken = usize::try_from(s.commits().wrapping_sub(commits0)).unwrap_or(usize::MAX);
+        if taken > 0 {
+            s.merge_undo(taken.saturating_add(usize::from(on_top)).min(s.undo.len()), "Import Lightroom Catalog");
+            self.top = Some((s.undo.len(), s.commits()));
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool) -> crate::Result<Value> {
     // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
@@ -1176,7 +1199,7 @@ fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool)
     let index_path = archive_dir.as_ref().map(|p| p.join("lightroom-index.json"));
     let index = load_index(index_path.as_deref())?;
     let archive_path = archive_dir.as_ref().map(|dir| crate::lightroom_archive::store(dir, &data).map_err(error)).transpose()?;
-    let undo0 = s.undo.len();
+    let mut steps = ImportSteps::default();
     let existing: HashMap<_, _> =
         s.catalog.photos().filter(|p| p.copy_of.is_none()).filter_map(|p| source_path(p).map(|path| (key(path), p.id))).collect();
     let paths: Vec<_> = data
@@ -1187,7 +1210,7 @@ fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool)
         .collect();
     let missing_sources: HashSet<String> =
         data.photos.iter().filter(|p| number(&p.image, "masterImage") == 0).filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
-    let files = crate::import::import(s, &paths, crate::import::ImportMode::Add)?;
+    let files = steps.run(s, |s| crate::import::import(s, &paths, crate::import::ImportMode::Add))?;
     let now = (s.clock)();
     let mut apply = LightroomApply::new(s, data.source.clone(), update_existing, index, data.warnings.clone(), now.clone());
     let mut probe = Photo::new(PhotoId(0), Source::File { path: String::new() }, "", "", 0, 0, &now);
@@ -1199,8 +1222,8 @@ fn apply(s: &mut crate::Session, mut data: CatalogImport, update_existing: bool)
             MappedPhoto::new(src, Shape::of(&probe))
         })
         .collect();
-    apply.batch(s, photos, files, &missing_sources)?;
-    let report = apply.finish(s, &data.collections, &data.members, true, undo0, archive_path.as_deref())?;
+    steps.run(s, |s| apply.batch(s, photos, files, &missing_sources))?;
+    let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, archive_path.as_deref()))?;
     if let Some(path) = index_path {
         s.persist()?;
         let bytes = serde_json::to_vec(&apply.index).map_err(|e| error(e.to_string()))?;
@@ -1323,7 +1346,7 @@ mod tests {
         let mut index = ImportIndex::default();
         let missing_sources = [key("/missing/test.ARW")].into_iter().collect();
         let mut import = |s: &mut crate::Session| {
-            let undo0 = s.undo.len();
+            let mut steps = ImportSteps::default();
             let mut apply = LightroomApply::new(s, data.source.clone(), false, index.clone(), Vec::new(), "now".into());
             let photos = data
                 .photos
@@ -1334,8 +1357,8 @@ mod tests {
                     MappedPhoto::new(src, shape)
                 })
                 .collect();
-            apply.batch(s, photos, Default::default(), &missing_sources).unwrap();
-            let report = apply.finish(s, &data.collections, &data.members, true, undo0, None).unwrap();
+            steps.run(s, |s| apply.batch(s, photos, Default::default(), &missing_sources)).unwrap();
+            let report = steps.run(s, |s| apply.finish(s, &data.collections, &data.members, true, None)).unwrap();
             index = apply.index.clone();
             report
         };

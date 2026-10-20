@@ -109,7 +109,7 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
-    /// Add: raws are described from their headers ([`crate::media::Media::header_probe`]), their
+    /// Add: raws are described from their headers ([`crate::media::MediaCache::header_probe`]), their
     /// pixel data never read: an import of many files from a slow drive (a Lightroom catalog's
     /// originals) reads a few percent of their bytes. Such files get no content hash, so a copy of
     /// one elsewhere is found by its content only when it is hashed on demand.
@@ -1095,11 +1095,16 @@ impl ImportJob {
             }
             if let Some(h) = &info.content_hash
                 && !opts.local
-                && let Some(existing) = self.by_hash.get(h).copied().or_else(|| self.unhashed_duplicate(h, info.file_size, &mut out.hashes).map(Some))
+                && let Some(existing) =
+                    self.by_hash.get(h).copied().or_else(|| self.unhashed_duplicate(h, info.file_size, &mut out.hashes, cancel).map(Some))
             {
                 self.done.fetch_add(1, Relaxed);
                 plan.slots.push(Slot::Item(PreparedItem::Duplicate { path, existing, reason: "content", hash: Some(h.clone()) }));
                 continue;
+            }
+            // (a cancel while comparing it with photos without a hash leaves the file out, unchecked)
+            if cancel.load(Relaxed) {
+                break;
             }
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
@@ -1227,16 +1232,29 @@ impl ImportJob {
     /// The photo already in the library whose file has content `hash`, among those of the same
     /// `size` that have no hash yet (each hashed now, once per import; new hashes go to `filled`).
     /// Skipped when many share the size (uncompressed raws of one camera all do): that would read
-    /// each of them in full.
-    fn unhashed_duplicate(&mut self, hash: &str, size: u64, filled: &mut Vec<(PhotoId, String)>) -> Option<PhotoId> {
+    /// each of them in full. Stops (`None`) once `cancel` is set, also while reading a file.
+    fn unhashed_duplicate(
+        &mut self,
+        hash: &str,
+        size: u64,
+        filled: &mut Vec<(PhotoId, String)>,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<PhotoId> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let candidates = self.unhashed.get(&size).filter(|c| c.len() <= MAX_UNHASHED_SAME_SIZE)?.clone();
             for (id, path) in candidates {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return None;
+                }
                 let known = match self.hashed.get(&id) {
                     Some(h) => h.clone(),
                     None => {
-                        let h = hash_file(&path);
+                        let h = hash_file(&path, size, cancel);
+                        // (a read cut short isn't remembered as a file that can't be hashed)
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            return None;
+                        }
                         self.hashed.insert(id, h.clone());
                         if let Some(h) = &h {
                             filled.push((id, h.clone()));
@@ -1253,7 +1271,7 @@ impl ImportJob {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (hash, size, filled);
+            let _ = (hash, size, filled, cancel);
             None
         }
     }
@@ -1276,13 +1294,42 @@ fn list_names(dir: &Path) -> Option<std::collections::HashSet<String>> {
     Some(names)
 }
 
-/// The content hash of the file at `path` (as a probe computes it), if it can be read.
+/// The content hash of the file at `path` (as a probe computes it), if it can be read and is
+/// still `size` bytes long: a file that changed since the photo was added would get a hash of
+/// other content than its record's size and dimensions describe. Read a piece at a time (in
+/// little memory), and given up (`None`) once `cancel` is set.
 #[cfg(not(target_arch = "wasm32"))]
-fn hash_file(path: &str) -> Option<String> {
-    let len = std::fs::metadata(path).ok()?.len();
-    let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
-    std::fs::read(path).ok().map(|b| lightcraft_preview::hash_bytes(&b).to_string())
+fn hash_file(path: &str, size: u64, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() != size {
+        return None;
+    }
+    let mut hasher = lightcraft_preview::Hasher128::new();
+    let mut piece = vec![0u8; HASH_PIECE];
+    let mut read = 0u64;
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        let n = match file.read(&mut piece) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        hasher.update(piece.get(..n)?);
+        read = read.saturating_add(n as u64);
+        if read > size {
+            return None;
+        }
+    }
+    (read == size).then(|| hasher.finish().to_string())
 }
+
+/// How much of a file [`hash_file`] reads at a time.
+#[cfg(not(target_arch = "wasm32"))]
+const HASH_PIECE: usize = 1 << 20;
 
 /// A batch's items in file order while its transfers are pending ([`ImportJob::run_plan`]).
 #[derive(Default)]
@@ -1836,6 +1883,58 @@ mod prepared_tests {
         assert_ne!(new, old, "the key changed");
         assert_eq!(std::fs::read(&new).ok().as_deref(), Some(&b"proxy"[..]), "the proxy is found under the new key");
         assert!(old.exists(), "the old file stays for an undo");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An original that changed size since it was added isn't hashed for its record: the hash
+    /// would describe other content than the record's size and dimensions (review of #1735).
+    #[test]
+    fn an_original_that_changed_size_gets_no_hash_on_demand() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-resized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy) = (dir.join("orig.jpg"), dir.join("copy.jpg"));
+        std::fs::write(&orig, b"same bytes, then more").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        // recorded when the original was 10 bytes long, as the new file is
+        existing.file_size = 10;
+        let id = existing.id;
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let report = import(&mut s, &[copy.to_string_lossy().to_string()], ImportMode::Add).unwrap();
+        assert!(report.duplicates.is_empty(), "{report:?}");
+        assert_eq!(s.catalog.photo(id).unwrap().content_hash, None, "no hash of the original's new content");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The hash taken a piece at a time is the probe's hash of the whole file, and a cancel
+    /// stops the read (review of #1735).
+    #[test]
+    fn hash_file_reads_in_pieces_and_stops_on_cancel() {
+        let dir = std::env::temp_dir().join(format!("lc-import-hash-pieces-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.raw");
+        let bytes: Vec<u8> = (0..(2 * HASH_PIECE + 12_345)).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let (path, size) = (path.to_string_lossy().to_string(), bytes.len() as u64);
+        let go = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(hash_file(&path, size, &go), Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
+        assert_eq!(hash_file(&path, size - 1, &go), None, "not the recorded size");
+        assert_eq!(hash_file(&path, size, &std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
         let _ = std::fs::remove_dir_all(dir);
     }
 
