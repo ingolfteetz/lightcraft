@@ -825,7 +825,18 @@ pub struct Prepared {
     pub scanned: usize,
     items: Vec<PreparedItem>,
     /// Content hashes computed on demand for photos already in the library, saved with the batch.
-    hashes: Vec<(PhotoId, String)>,
+    hashes: Vec<OnDemandHash>,
+}
+
+/// A content hash computed on demand for a photo already in the library, and the file it was
+/// taken of: saved only if the photo still has that file when the batch is committed (it may be
+/// relinked, or its file change, while the batch is prepared).
+#[derive(Debug, Clone)]
+struct OnDemandHash {
+    id: PhotoId,
+    path: String,
+    size: u64,
+    hash: String,
 }
 
 #[derive(Debug)]
@@ -1237,7 +1248,7 @@ impl ImportJob {
         &mut self,
         hash: &str,
         size: u64,
-        filled: &mut Vec<(PhotoId, String)>,
+        filled: &mut Vec<OnDemandHash>,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Option<PhotoId> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -1257,7 +1268,7 @@ impl ImportJob {
                         }
                         self.hashed.insert(id, h.clone());
                         if let Some(h) = &h {
-                            filled.push((id, h.clone()));
+                            filled.push(OnDemandHash { id, path: path.clone(), size, hash: h.clone() });
                             self.by_hash.insert(h.clone(), Some(id));
                         }
                         h
@@ -1535,8 +1546,12 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     // hashes computed on demand (to compare a new file with photos added from their headers) are kept
     // (the photo's proxy moves to its new key with it: `carried`)
     let mut carried: Vec<(Photo, Photo)> = Vec::new();
-    for (id, hash) in &prepared.hashes {
-        if let Some(p) = s.catalog.photo(*id).filter(|p| p.content_hash.is_none()) {
+    for OnDemandHash { id, path, size, hash } in &prepared.hashes {
+        // (only onto the file it was taken of: not one relinked or changed since)
+        let same_file = |p: &&std::sync::Arc<Photo>| {
+            p.content_hash.is_none() && p.file_size == *size && matches!(&p.source, Source::File { path: now } if now == path)
+        };
+        if let Some(p) = s.catalog.photo(*id).filter(same_file) {
             let before = Photo::clone(p);
             carried.push((before.clone(), Photo { content_hash: Some(hash.clone()), ..before }));
             ops.push(Op::SetContent {
@@ -1935,6 +1950,44 @@ mod prepared_tests {
         assert_eq!(hash_file(&path, size, &go), Some(lightcraft_preview::hash_bytes(&bytes).to_string()));
         assert_eq!(hash_file(&path, size - 1, &go), None, "not the recorded size");
         assert_eq!(hash_file(&path, size, &std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A hash computed on demand while a batch is prepared is taken of the photo's file then: a
+    /// photo relinked to another file before the batch is committed doesn't get it (review of #2051).
+    #[test]
+    fn a_hash_of_a_relinked_photo_is_not_kept() {
+        let dir = std::env::temp_dir().join(format!("lc-import-unhashed-relinked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (orig, copy, other) = (dir.join("orig.jpg"), dir.join("copy.jpg"), dir.join("other.jpg"));
+        std::fs::write(&orig, b"same bytes").unwrap();
+        std::fs::write(&copy, b"same bytes").unwrap();
+        std::fs::write(&other, b"diff bytes").unwrap();
+        let mut s = Session::new();
+        s.media.file_probe = Some(std::sync::Arc::new(|path: &str| {
+            let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(ProbeInfo {
+                format: "JPEG".into(),
+                width: 1,
+                height: 1,
+                file_size: bytes.len() as u64,
+                content_hash: Some(lightcraft_preview::hash_bytes(&bytes).to_string()),
+                ..Default::default()
+            })
+        }));
+        let mut existing =
+            Photo::new(s.catalog.alloc_photo_id(), Source::File { path: orig.to_string_lossy().into() }, "orig.jpg", "JPEG", 1, 1, "now");
+        existing.file_size = 10;
+        let id = existing.id;
+        s.commit("existing", Op::AddPhoto { photo: Box::new(existing) }).unwrap();
+        let mut job = ImportJob::new(&mut s, ImportOptions::default()).unwrap();
+        let prepared = job.prepare(&[copy.to_string_lossy().to_string()], &std::sync::atomic::AtomicBool::new(false));
+        // while the batch was prepared, the photo was relinked to another file
+        let source = Source::File { path: other.to_string_lossy().into() };
+        s.commit("relink", Op::Relink { id, file_name: "other.jpg".into(), source, format: None }).unwrap();
+        commit_prepared(&mut s, &job.opts, &job.now, prepared).unwrap();
+        assert_eq!(s.catalog.photo(id).and_then(|p| p.content_hash.clone()), None, "orig.jpg's hash is not other.jpg's");
         let _ = std::fs::remove_dir_all(dir);
     }
 
