@@ -499,7 +499,7 @@ pub(crate) fn probe_with(probe: &crate::media::FileProbe, paths: &[String]) -> V
 
 /// Probe `paths` (several at once), counting each in `done`. Stops before the next file once
 /// `cancel` is set: the files not reached come back as errors.
-fn probe_all(
+pub(crate) fn probe_all(
     probe: Option<&crate::media::FileProbe>,
     paths: &[String],
     done: &std::sync::atomic::AtomicUsize,
@@ -1014,9 +1014,11 @@ impl ImportJob {
     }
 
     /// What the library held when the import was set up, by path and by content: made once, with
-    /// the first files (on the thread that prepares them), from the library as it was then.
-    fn look_up_library(&mut self) {
-        let Some((library, fresh)) = self.library.take() else { return };
+    /// the first files (on the thread that prepares them), from the library as it was then. The
+    /// snapshot comes back: the files the import is adding are ranked against it for the ownership
+    /// of the shared stem sidecars they read ([`crate::sidecar::ImportStems`]).
+    fn look_up_library(&mut self) -> Option<lightcraft_catalog::Catalog> {
+        let (library, fresh) = self.library.take()?;
         for p in library.photos() {
             // a trashed photo is replaced by a fresh import, so it doesn't count as a duplicate
             if p.deleted && fresh {
@@ -1032,12 +1034,14 @@ impl ImportJob {
                 self.by_hash.insert(h.clone(), Some(p.id));
             }
         }
+        Some(library)
     }
 
     /// [`ImportJob::prepare`] for files [`ImportJob::expand`] returned.
     pub fn prepare_files(&mut self, files: Vec<String>, cancel: &std::sync::atomic::AtomicBool) -> Prepared {
         use std::sync::atomic::Ordering::Relaxed;
-        self.look_up_library();
+        // the library as it was, kept for the ownership of the shared stem sidecars below
+        let library = self.look_up_library();
         let opts = self.opts.clone();
         let mode = self.mode;
         let mut out = Prepared { scanned: files.len(), ..Prepared::default() };
@@ -1077,6 +1081,13 @@ impl ImportJob {
         let probed: Vec<Result<ProbeInfo, String>> =
             cached.into_iter().map(|c| c.map(Ok).unwrap_or_else(|| fresh.next().unwrap_or_else(|| Err("not probed".into())))).collect();
         crate::memory::release();
+        // Who owns the shared stem sidecar (`IMG_0001.xmp`) among the library's files and the ones
+        // arriving with this import: a JPEG or a TIFF arriving beside its raw reads its own sidecar
+        // and never the raw's packet (issue #1905).
+        let stems = crate::sidecar::ImportStems::for_import(
+            library.as_ref(),
+            todo.iter().zip(&probed).filter_map(|(path, info)| info.as_ref().ok().map(|i| (path.as_str(), i.kind))),
+        );
         // Files are planned one by one, in order (duplicates, sidecars, names, folders); their
         // copies or moves — the slow part, reading and writing every byte and verifying it — are
         // collected and run on several threads (issue #367), then their outcomes take their places.
@@ -1120,7 +1131,7 @@ impl ImportJob {
             // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let packet = self.find_sidecar(&path).and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw));
+            let packet = self.find_sidecar(&stems, &path).and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),
@@ -1216,10 +1227,10 @@ impl ImportJob {
         }
     }
 
-    /// [`crate::sidecar::find_sidecar`], asking the drive only when the folder (listed once per
-    /// import) holds a file of that name: most photos have no sidecar, and on a slow drive looking
-    /// for a file that isn't there costs about as much as listing its folder.
-    fn find_sidecar(&mut self, path: &str) -> Option<PathBuf> {
+    /// [`crate::sidecar::find_sidecar_for_import`], asking the drive only when the folder (listed
+    /// once per import) holds a file of that name: most photos have no sidecar, and on a slow drive
+    /// looking for a file that isn't there costs about as much as listing its folder.
+    fn find_sidecar(&mut self, stems: &crate::sidecar::ImportStems, path: &str) -> Option<PathBuf> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use crate::sidecar::{SidecarNaming, sidecar_path};
@@ -1237,7 +1248,7 @@ impl ImportJob {
                 return None;
             }
         }
-        crate::sidecar::find_sidecar(path, self.naming)
+        crate::sidecar::find_sidecar_for_import(stems, self.naming, path)
     }
 
     /// The photo already in the library whose file has content `hash`, among those of the same
@@ -1775,6 +1786,7 @@ impl Session {
             display: None,
             slide: None,
             preview_cut: None,
+            display_fit: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),
@@ -1808,13 +1820,16 @@ mod prepared_tests {
         }
         let mut job = ImportJob::new(&mut Session::new(), ImportOptions::default()).unwrap();
         let at = |n: &str| dir.join(n).to_string_lossy().to_string();
-        assert!(job.find_sidecar(&at("a.jpg")).is_some(), "an upper-case extension is found");
-        assert_eq!(job.find_sidecar(&at("b.jpg")), None);
-        assert!(job.find_sidecar(&at("c.jpg")).is_some(), "the full-name convention is found");
-        assert!(job.find_sidecar(&at("\u{fc}.jpg")).is_some(), "a non-ASCII name is asked for directly");
+        let arriving: Vec<String> = ["a.jpg", "b.jpg", "c.jpg", "\u{fc}.jpg", "gone/d.jpg"].into_iter().map(at).collect();
+        // (each arriving file owns its stem sidecar: no two share a stem)
+        let stems = crate::sidecar::ImportStems::for_import(None, arriving.iter().map(|p| (p.as_str(), lightcraft_catalog::MediaKind::Image)));
+        assert!(job.find_sidecar(&stems, &at("a.jpg")).is_some(), "an upper-case extension is found");
+        assert_eq!(job.find_sidecar(&stems, &at("b.jpg")), None);
+        assert!(job.find_sidecar(&stems, &at("c.jpg")).is_some(), "the full-name convention is found");
+        assert!(job.find_sidecar(&stems, &at("\u{fc}.jpg")).is_some(), "a non-ASCII name is asked for directly");
         assert_eq!(job.listings.len(), 1, "the folder is listed once");
         // a missing folder is no listing: each file is asked for, as before
-        assert_eq!(job.find_sidecar(&dir.join("gone/d.jpg").to_string_lossy()), None);
+        assert_eq!(job.find_sidecar(&stems, &at("gone/d.jpg")), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
