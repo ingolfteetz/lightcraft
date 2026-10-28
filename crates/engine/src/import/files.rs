@@ -5,7 +5,7 @@ use super::job::{ImportJob, Prepared, PreparedItem, ReadyFile};
 use super::scan::ScanProgress;
 #[cfg(test)]
 use super::types::{ImportMode, ImportOptions};
-use super::*;
+use super::{Path, PathBuf, ProbeInfo, Session};
 
 /// File extensions offered by import discovery and file pickers (lower case).
 /// This includes preview-only raws; the file probe decides whether sensor decoding is available.
@@ -253,7 +253,9 @@ pub(super) fn copy_into(dir: &Path, src: &str, name: Option<&str>, probe_hash: O
 #[cfg(test)]
 mod prepared_tests {
     use super::super::job::{HASH_PIECE, hash_file};
+    use super::super::{commit_prepared, import};
     use super::*;
+    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 
     /// Extensions the picker may offer: every one in [`EXTENSIONS`], minus the
     /// files this build cannot import (see [`accept_list`]).
