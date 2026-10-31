@@ -80,11 +80,17 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// Probe a whole file (its bytes are read once, and hashed).
 pub(super) fn probe_file(path: &str) -> Result<ProbeInfo, String> {
-    let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+    use std::io::Read;
+    // one open, then everything from the open file: its size and modification time are not
+    // round trips of their own (on a network share each of them is one)
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let meta = file.metadata().ok();
+    let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
     let _permit = crate::memory::work_gate().acquire(len);
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
     let mut info = probe_bytes(path, &bytes)?;
-    info.file_modified = file_modified(path);
+    info.file_modified = meta.as_ref().and_then(modified_iso);
     Ok(info)
 }
 
@@ -108,10 +114,7 @@ const PARTIAL_SHARE: u64 = 6;
 pub fn fs_header_probe() -> FileProbe {
     Arc::new(|path: &str| {
         let info = match probe_partial(path) {
-            Ok(Some(mut info)) => {
-                info.file_modified = file_modified(path);
-                Ok(info)
-            }
+            Ok(Some(info)) => Ok(info),
             Ok(None) | Err(_) => probe_file(path),
         };
         // the file's buffer (and any whole-file copy) is gone: give its pages back, as a load does
@@ -124,7 +127,9 @@ pub fn fs_header_probe() -> FileProbe {
 pub(super) fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
     use lightcraft_raw::sparse::{Ranges, header_plan, preview_plan};
     let mut file = std::fs::File::open(path)?;
-    let len = file.metadata()?.len();
+    // (its size and modification time from the open file: no round trips of their own)
+    let meta = file.metadata()?;
+    let len = meta.len();
     if !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
         return Ok(None);
     }
@@ -144,7 +149,8 @@ pub(super) fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
     if matches!(raw, Some(Err(_))) && read_planned(&mut file, &mut buf, &mut loaded, PARTIAL_ROUNDS, PARTIAL_SHARE, preview_plan)? != Planned::Ready {
         return Ok(None);
     }
-    Ok(describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw))
+    let info = describe(path, &buf, raw, false).ok().filter(|i| i.kind == MediaKind::Raw);
+    Ok(info.map(|info| ProbeInfo { file_modified: modified_iso(&meta), ..info }))
 }
 
 /// What reading a file in part came to ([`read_planned`]).
@@ -215,10 +221,10 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     r
 }
 
-/// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
+/// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
 /// filesystem doesn't say or the time is before 1970.
-fn file_modified(path: &str) -> Option<String> {
-    let t = std::fs::metadata(path).ok()?.modified().ok()?;
+fn modified_iso(meta: &std::fs::Metadata) -> Option<String> {
+    let t = meta.modified().ok()?;
     let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
     Some(crate::import::civil(secs))
 }
